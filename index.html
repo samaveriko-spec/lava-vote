@@ -83,6 +83,7 @@
   .btn-wow { background: #ff3d7f; }
   .btn-think { background: #5b6dff; }
   .btn-know { background: #2fd9a5; }
+  .btn-reset { background: #444; margin-top: 30px; font-size: 12px; padding: 8px 16px; }
 
   .leader {
     margin-top: 24px;
@@ -109,7 +110,6 @@
   }
   #fsBtn:hover { opacity: 1; background: #333; }
 
-  /* Скрыть курсор в полноэкранном режиме */
   :fullscreen { cursor: none; }
   :fullscreen #fsBtn { cursor: pointer; opacity: 0.15; }
   :fullscreen #fsBtn:hover { opacity: 1; }
@@ -149,340 +149,294 @@
   <button class="btn-know" onclick="vote(2)">🧐 Я это знаю</button>
 </div>
 
-<div class="leader" id="leader">Пока никто не голосовал</div>
+<button class="btn-reset" onclick="resetVotes()">Сбросить все голоса (для админа)</button>
 
-<script>
-// ============================================================
-//  НАСТРОЙКА КИОСК-РЕЖИМА
-//  false — обычный режим (для зрителей с телефонов)
-//  true  — экран в зале: автовход в fullscreen при первом
-//          клике + запрет выхода по Esc
-// ============================================================
-const KIOSK_MODE = false;   // <-- поставьте true для выставочного экрана
+<div class="leader" id="leader">Загрузка данных...</div>
 
-// ---------- Лампы ----------
-const LAMP_CONFIG = [
-  { color: '#ff3d7f', glow: 'rgba(255,61,127,0.6)' },
-  { color: '#5b6dff', glow: 'rgba(91,109,255,0.6)' },
-  { color: '#2fd9a5', glow: 'rgba(47,217,165,0.6)' }
-];
+<!-- ПОДКЛЮЧАЕМ FIREBASE (Ваши ключи уже вставлены) -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
+  import { getDatabase, ref, onValue, runTransaction, set } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-database.js";
 
-const W = 180;
-const H = 500;
-const VOTES = [0, 0, 0];
-const MAX_BUBBLES = 40;
+  const firebaseConfig = {
+    apiKey: "AIzaSyCxBIU7KjYPWx_gKC2KuFr5fJDGelPqrWQ",
+    authDomain: "lava-vote.firebaseapp.com",
+    databaseURL: "https://lava-vote-default-rtdb.firebaseio.com",
+    projectId: "lava-vote",
+    storageBucket: "lava-vote.firebasestorage.app",
+    messagingSenderId: "250923521698",
+    appId: "1:250923521698:web:3a9c0b4707c7165e3869fb"
+  };
 
-// ---------- Класс лампы ----------
-class LavaLamp {
-  constructor(canvas, config) {
-    this.canvas = canvas;
-    canvas.width = W;
-    canvas.height = H;
-    this.ctx = canvas.getContext('2d');
-    this.w = W;
-    this.h = H;
-    this.color = config.color;
-    this.glow = config.glow;
+  // Инициализация Firebase
+  const app = initializeApp(firebaseConfig);
+  const db = getDatabase(app);
+  const votesRef = ref(db, 'votes');
 
-    this.bubbles = [];
-    this.targetCount = 0;
-    this.spawnTimer = 0;
-    this.t = 0;
+  // --- Логика ламп ---
+  const LAMP_CONFIG = [
+    { color: '#ff3d7f', glow: 'rgba(255,61,127,0.6)' },
+    { color: '#5b6dff', glow: 'rgba(91,109,255,0.6)' },
+    { color: '#2fd9a5', glow: 'rgba(47,217,165,0.6)' }
+  ];
 
-    this.topY = 100;
-    this.bottomY = H - 100;
-    this.leftX = 32;
-    this.rightX = W - 32;
+  const W = 180;
+  const H = 500;
+  let VOTES = [0, 0, 0];
+  const MAX_BUBBLES = 40;
 
-    this.baseVy = -0.55;
-    this.baseRadius = 12;
-  }
-
-  setVotes(n) {
-    this.targetCount = Math.min(MAX_BUBBLES, n);
-  }
-
-  get bubbleRadius() {
-    const scale = Math.min(1, 20 / Math.max(1, this.targetCount));
-    return this.baseRadius * (0.7 + 0.3 * scale);
-  }
-
-  spawnBubble() {
-    const r = this.bubbleRadius;
-    const margin = r + 4;
-    const x = this.leftX + margin + Math.random() * (this.rightX - this.leftX - margin * 2);
-
-    this.bubbles.push({
-      x,
-      y: this.bottomY - Math.random() * 20,
-      r,
-      targetR: r,
-      currentR: 0.5,
-      vy: this.baseVy * (0.85 + Math.random() * 0.3),
-      wobble: Math.random() * Math.PI * 2,
-      wobbleSpeed: 0.008 + Math.random() * 0.012,
-      wobbleAmp: 2 + Math.random() * 3,
-      age: 0,
-      birthDuration: 220,
-      settled: false
-    });
-  }
-
-  update(dt) {
-    this.t += dt;
-
-    if (this.bubbles.length < this.targetCount) {
-      this.spawnTimer -= dt;
-      if (this.spawnTimer <= 0) {
-        this.spawnBubble();
-        this.spawnTimer = 120;
-      }
+  class LavaLamp {
+    constructor(canvas, config) {
+      this.canvas = canvas;
+      canvas.width = W;
+      canvas.height = H;
+      this.ctx = canvas.getContext('2d');
+      this.w = W;
+      this.h = H;
+      this.color = config.color;
+      this.glow = config.glow;
+      this.bubbles = [];
+      this.targetCount = 0;
+      this.spawnTimer = 0;
+      this.t = 0;
+      this.topY = 100;
+      this.bottomY = H - 100;
+      this.leftX = 32;
+      this.rightX = W - 32;
+      this.baseVy = -0.55;
+      this.baseRadius = 12;
     }
 
-    for (const b of this.bubbles) {
-      if (b.age < b.birthDuration) {
-        b.age += dt;
-        const k = Math.min(1, b.age / b.birthDuration);
-        b.currentR = b.targetR * (1 - Math.pow(1 - k, 3));
-      } else {
-        b.currentR = b.targetR;
+    setVotes(n) {
+      this.targetCount = Math.min(MAX_BUBBLES, n);
+    }
+
+    get bubbleRadius() {
+      const scale = Math.min(1, 20 / Math.max(1, this.targetCount));
+      return this.baseRadius * (0.7 + 0.3 * scale);
+    }
+
+    spawnBubble() {
+      const r = this.bubbleRadius;
+      const margin = r + 4;
+      const x = this.leftX + margin + Math.random() * (this.rightX - this.leftX - margin * 2);
+      this.bubbles.push({
+        x, y: this.bottomY - Math.random() * 20,
+        r, targetR: r, currentR: 0.5,
+        vy: this.baseVy * (0.85 + Math.random() * 0.3),
+        wobble: Math.random() * Math.PI * 2,
+        wobbleSpeed: 0.008 + Math.random() * 0.012,
+        wobbleAmp: 2 + Math.random() * 3,
+        age: 0, birthDuration: 220, settled: false
+      });
+    }
+
+    update(dt) {
+      this.t += dt;
+      if (this.bubbles.length < this.targetCount) {
+        this.spawnTimer -= dt;
+        if (this.spawnTimer <= 0) {
+          this.spawnBubble();
+          this.spawnTimer = 120;
+        }
       }
+      for (const b of this.bubbles) {
+        if (b.age < b.birthDuration) {
+          b.age += dt;
+          const k = Math.min(1, b.age / b.birthDuration);
+          b.currentR = b.targetR * (1 - Math.pow(1 - k, 3));
+        } else {
+          b.currentR = b.targetR;
+        }
+        if (!b.settled) {
+          b.y += b.vy * dt * 0.06;
+          b.wobble += b.wobbleSpeed;
+          b.x = b.x + Math.sin(b.wobble) * b.wobbleAmp * 0.02;
+          if (b.x - b.currentR < this.leftX + 2) b.x = this.leftX + 2 + b.currentR;
+          if (b.x + b.currentR > this.rightX - 2) b.x = this.rightX - 2 - b.currentR;
+          if (b.y - b.currentR <= this.topY + 5) {
+            b.y = this.topY + 5 + b.currentR;
+            b.settled = true;
+          }
+        } else {
+          b.wobble += 0.01;
+          b.x += Math.sin(b.wobble) * 0.05;
+        }
+      }
+      this.resolveSettled();
+    }
 
-      if (!b.settled) {
-        b.y += b.vy * dt * 0.06;
-        b.wobble += b.wobbleSpeed;
-        b.x = b.x + Math.sin(b.wobble) * b.wobbleAmp * 0.02;
-
+    resolveSettled() {
+      const settled = this.bubbles.filter(b => b.settled);
+      settled.sort((a, b) => b.y - a.y);
+      for (let i = 0; i < settled.length; i++) {
+        const a = settled[i];
+        for (let j = i + 1; j < settled.length; j++) {
+          const b = settled[j];
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const dist = Math.hypot(dx, dy);
+          const minDist = a.currentR + b.currentR + 1;
+          if (dist < minDist && dist > 0.001) {
+            const push = (minDist - dist) / 2;
+            const ux = dx / dist;
+            const uy = dy / dist;
+            b.x += ux * push; b.y += uy * push;
+            a.x -= ux * push; a.y -= uy * push;
+          }
+        }
+      }
+      for (const b of settled) {
         if (b.x - b.currentR < this.leftX + 2) b.x = this.leftX + 2 + b.currentR;
         if (b.x + b.currentR > this.rightX - 2) b.x = this.rightX - 2 - b.currentR;
-
-        if (b.y - b.currentR <= this.topY + 5) {
-          b.y = this.topY + 5 + b.currentR;
-          b.settled = true;
-        }
-      } else {
-        b.wobble += 0.01;
-        b.x += Math.sin(b.wobble) * 0.05;
+        if (b.y - b.currentR < this.topY + 4) b.y = this.topY + 4 + b.currentR;
+        if (b.y + b.currentR > this.bottomY) b.y = this.bottomY - b.currentR;
       }
     }
 
-    this.resolveSettled();
-  }
-
-  resolveSettled() {
-    const settled = this.bubbles.filter(b => b.settled);
-    settled.sort((a, b) => b.y - a.y);
-
-    for (let i = 0; i < settled.length; i++) {
-      const a = settled[i];
-      for (let j = i + 1; j < settled.length; j++) {
-        const b = settled[j];
-        const dx = b.x - a.x;
-        const dy = b.y - a.y;
-        const dist = Math.hypot(dx, dy);
-        const minDist = a.currentR + b.currentR + 1;
-        if (dist < minDist && dist > 0.001) {
-          const push = (minDist - dist) / 2;
-          const ux = dx / dist;
-          const uy = dy / dist;
-          b.x += ux * push;
-          b.y += uy * push;
-          a.x -= ux * push;
-          a.y -= uy * push;
-        }
-      }
-    }
-
-    for (const b of settled) {
-      if (b.x - b.currentR < this.leftX + 2) b.x = this.leftX + 2 + b.currentR;
-      if (b.x + b.currentR > this.rightX - 2) b.x = this.rightX - 2 - b.currentR;
-      if (b.y - b.currentR < this.topY + 4) b.y = this.topY + 4 + b.currentR;
-      if (b.y + b.currentR > this.bottomY) b.y = this.bottomY - b.currentR;
-    }
-  }
-
-  draw() {
-    const ctx = this.ctx;
-    ctx.clearRect(0, 0, this.w, this.h);
-
-    const bodyGrad = ctx.createLinearGradient(0, 0, this.w, 0);
-    bodyGrad.addColorStop(0, '#4a4a55');
-    bodyGrad.addColorStop(0.5, '#c8c8d0');
-    bodyGrad.addColorStop(1, '#4a4a55');
-    ctx.fillStyle = bodyGrad;
-
-    ctx.beginPath();
-    ctx.moveTo(16, this.h);
-    ctx.lineTo(this.w - 16, this.h);
-    ctx.lineTo(this.w - 36, this.h - 100);
-    ctx.lineTo(36, this.h - 100);
-    ctx.closePath();
-    ctx.fill();
-
-    ctx.beginPath();
-    ctx.moveTo(36, this.topY);
-    ctx.lineTo(this.w - 36, this.topY);
-    ctx.quadraticCurveTo(this.w / 2, -16, this.w / 2, 0);
-    ctx.closePath();
-    ctx.fill();
-
-    const glassGrad = ctx.createLinearGradient(0, this.topY, 0, this.bottomY);
-    glassGrad.addColorStop(0, this.hexToRgba(this.color, 0.10));
-    glassGrad.addColorStop(0.5, this.hexToRgba(this.color, 0.35));
-    glassGrad.addColorStop(1, this.hexToRgba(this.color, 0.55));
-    ctx.fillStyle = glassGrad;
-    ctx.fillRect(this.leftX, this.topY, this.rightX - this.leftX, this.bottomY - this.topY);
-
-    const fillRatio = this.bubbles.length / MAX_BUBBLES;
-    ctx.save();
-    ctx.shadowColor = this.glow;
-    ctx.shadowBlur = 25 + fillRatio * 50;
-    ctx.fillStyle = this.hexToRgba(this.color, 0.15 + fillRatio * 0.35);
-    ctx.fillRect(this.leftX, this.topY, this.rightX - this.leftX, this.bottomY - this.topY);
-    ctx.restore();
-
-    for (const b of this.bubbles) {
-      const r = b.currentR;
-      if (r <= 0) continue;
-
+    draw() {
+      const ctx = this.ctx;
+      ctx.clearRect(0, 0, this.w, this.h);
+      const bodyGrad = ctx.createLinearGradient(0, 0, this.w, 0);
+      bodyGrad.addColorStop(0, '#4a4a55');
+      bodyGrad.addColorStop(0.5, '#c8c8d0');
+      bodyGrad.addColorStop(1, '#4a4a55');
+      ctx.fillStyle = bodyGrad;
+      ctx.beginPath();
+      ctx.moveTo(16, this.h); ctx.lineTo(this.w - 16, this.h);
+      ctx.lineTo(this.w - 36, this.h - 100); ctx.lineTo(36, this.h - 100);
+      ctx.closePath(); ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(36, this.topY); ctx.lineTo(this.w - 36, this.topY);
+      ctx.quadraticCurveTo(this.w / 2, -16, this.w / 2, 0);
+      ctx.closePath(); ctx.fill();
+      const glassGrad = ctx.createLinearGradient(0, this.topY, 0, this.bottomY);
+      glassGrad.addColorStop(0, this.hexToRgba(this.color, 0.10));
+      glassGrad.addColorStop(0.5, this.hexToRgba(this.color, 0.35));
+      glassGrad.addColorStop(1, this.hexToRgba(this.color, 0.55));
+      ctx.fillStyle = glassGrad;
+      ctx.fillRect(this.leftX, this.topY, this.rightX - this.leftX, this.bottomY - this.topY);
+      const fillRatio = this.bubbles.length / MAX_BUBBLES;
       ctx.save();
-      ctx.shadowColor = this.hexToRgba(this.color, 0.9);
-      ctx.shadowBlur = 8;
-
-      const grad = ctx.createRadialGradient(
-        b.x - r * 0.35, b.y - r * 0.35, r * 0.1,
-        b.x, b.y, r
-      );
-      grad.addColorStop(0, this.hexToRgba(this.color, 0.98));
-      grad.addColorStop(0.55, this.hexToRgba(this.color, 0.7));
-      grad.addColorStop(1, this.hexToRgba(this.color, 0.25));
-
-      ctx.beginPath();
-      ctx.arc(b.x, b.y, r, 0, Math.PI * 2);
-      ctx.fillStyle = grad;
-      ctx.fill();
+      ctx.shadowColor = this.glow;
+      ctx.shadowBlur = 25 + fillRatio * 50;
+      ctx.fillStyle = this.hexToRgba(this.color, 0.15 + fillRatio * 0.35);
+      ctx.fillRect(this.leftX, this.topY, this.rightX - this.leftX, this.bottomY - this.topY);
       ctx.restore();
-
-      ctx.beginPath();
-      ctx.arc(b.x - r * 0.3, b.y - r * 0.3, r * 0.25, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(255,255,255,0.6)';
-      ctx.fill();
+      for (const b of this.bubbles) {
+        const r = b.currentR;
+        if (r <= 0) continue;
+        ctx.save();
+        ctx.shadowColor = this.hexToRgba(this.color, 0.9);
+        ctx.shadowBlur = 8;
+        const grad = ctx.createRadialGradient(b.x - r * 0.35, b.y - r * 0.35, r * 0.1, b.x, b.y, r);
+        grad.addColorStop(0, this.hexToRgba(this.color, 0.98));
+        grad.addColorStop(0.55, this.hexToRgba(this.color, 0.7));
+        grad.addColorStop(1, this.hexToRgba(this.color, 0.25));
+        ctx.beginPath(); ctx.arc(b.x, b.y, r, 0, Math.PI * 2);
+        ctx.fillStyle = grad; ctx.fill();
+        ctx.restore();
+        ctx.beginPath(); ctx.arc(b.x - r * 0.3, b.y - r * 0.3, r * 0.25, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.fill();
+      }
+      const shine = ctx.createLinearGradient(this.leftX + 5, 0, this.leftX + 30, 0);
+      shine.addColorStop(0, 'rgba(255,255,255,0.0)');
+      shine.addColorStop(0.5, 'rgba(255,255,255,0.22)');
+      shine.addColorStop(1, 'rgba(255,255,255,0.0)');
+      ctx.fillStyle = shine;
+      ctx.fillRect(this.leftX + 5, this.topY, 25, this.bottomY - this.topY);
     }
-
-    const shine = ctx.createLinearGradient(this.leftX + 5, 0, this.leftX + 30, 0);
-    shine.addColorStop(0, 'rgba(255,255,255,0.0)');
-    shine.addColorStop(0.5, 'rgba(255,255,255,0.22)');
-    shine.addColorStop(1, 'rgba(255,255,255,0.0)');
-    ctx.fillStyle = shine;
-    ctx.fillRect(this.leftX + 5, this.topY, 25, this.bottomY - this.topY);
+    hexToRgba(hex, alpha) {
+      const r = parseInt(hex.slice(1, 3), 16);
+      const g = parseInt(hex.slice(3, 5), 16);
+      const b = parseInt(hex.slice(5, 7), 16);
+      return `rgba(${r},${g},${b},${alpha})`;
+    }
   }
 
-  hexToRgba(hex, alpha) {
-    const r = parseInt(hex.slice(1, 3), 16);
-    const g = parseInt(hex.slice(3, 5), 16);
-    const b = parseInt(hex.slice(5, 7), 16);
-    return `rgba(${r},${g},${b},${alpha})`;
-  }
-}
+  const lamps = LAMP_CONFIG.map((cfg, i) => {
+    const canvas = document.getElementById('lamp' + i);
+    return new LavaLamp(canvas, cfg);
+  });
 
-// ---------- Инициализация ----------
-const lamps = LAMP_CONFIG.map((cfg, i) => {
-  const canvas = document.getElementById('lamp' + i);
-  return new LavaLamp(canvas, cfg);
-});
-
-// ---------- Голосование ----------
-function vote(index) {
-  VOTES[index]++;
-  document.getElementById('count' + index).textContent = VOTES[index];
-  lamps[index].setVotes(VOTES[index]);
-  updateFill(index);
-  updateLeader();
-}
-
-function updateFill(index) {
-  const fillEl = document.getElementById('fill' + index);
-  const pct = Math.round(Math.min(100, (VOTES[index] / MAX_BUBBLES) * 100));
-  fillEl.textContent = `заполнено ${pct}%`;
-}
-
-function updateLeader() {
-  const total = VOTES.reduce((a, b) => a + b, 0);
-  const leaderEl = document.getElementById('leader');
-  if (total === 0) {
-    leaderEl.textContent = 'Пока никто не голосовал';
-    return;
-  }
-  const max = Math.max(...VOTES);
-  const winners = VOTES.map((v, i) => v === max ? i : -1).filter(i => i >= 0);
-  const names = ['Вау-эффект', 'Есть над чем подумать', 'Я это знаю'];
-  if (winners.length === 3) {
-    leaderEl.textContent = `Голосов: ${total}. Аудитория разделилась поровну!`;
-  } else if (winners.length > 1) {
-    leaderEl.textContent = `Голосов: ${total}. Лидируют: ${winners.map(i => names[i]).join(' и ')}`;
-  } else {
-    leaderEl.textContent = `Голосов: ${total}. Лидер: ${names[winners[0]]}`;
-  }
-}
-
-// ---------- Анимационный цикл ----------
-let last = performance.now();
-function loop(now) {
-  const dt = Math.min(50, now - last);
-  last = now;
-  for (const lamp of lamps) {
-    lamp.update(dt);
-    lamp.draw();
-  }
-  requestAnimationFrame(loop);
-}
-requestAnimationFrame(loop);
-
-// ============================================================
-//  FULLSCREEN
-// ============================================================
-
-// Кнопка «На весь экран»
-function toggleFullscreen() {
-  if (!document.fullscreenElement) {
-    document.documentElement.requestFullscreen().catch(err => {
-      console.warn('Fullscreen error:', err);
-    });
-  } else {
-    document.exitFullscreen();
-  }
-}
-
-// Меняем надпись на кнопке при входе/выходе
-document.addEventListener('fullscreenchange', () => {
-  const btn = document.getElementById('fsBtn');
-  btn.textContent = document.fullscreenElement ? '⛶ Выйти' : '⛶ На весь экран';
-});
-
-// ---- Автовход в fullscreen при первом взаимодействии ----
-let fsTriggered = false;
-
-function autoFullscreen() {
-  if (fsTriggered) return;
-  if (!document.fullscreenElement) {
-    document.documentElement.requestFullscreen().catch(() => {});
-  }
-  fsTriggered = true;
-}
-
-if (KIOSK_MODE) {
-  document.addEventListener('click', autoFullscreen, { once: true });
-  document.addEventListener('touchstart', autoFullscreen, { once: true });
-
-  // Не даём выйти по Esc в киоск-режиме
-  document.addEventListener('fullscreenchange', () => {
-    if (!document.fullscreenElement && fsTriggered) {
-      setTimeout(() => {
-        document.documentElement.requestFullscreen().catch(() => {});
-      }, 100);
+  // --- СВЯЗЬ С БАЗОЙ ДАННЫХ ---
+  onValue(votesRef, (snapshot) => {
+    const data = snapshot.val();
+    if (data) {
+      VOTES = [data.v0 || 0, data.v1 || 0, data.v2 || 0];
+      updateUI();
+    } else {
+      // Если базы нет (первый запуск), создаем нули
+      resetVotes();
     }
   });
-}
+
+  window.vote = function(index) {
+    runTransaction(ref(db, 'votes/v' + index), (currentValue) => {
+      return (currentValue || 0) + 1;
+    });
+  };
+
+  window.resetVotes = function() {
+    if(confirm("Вы уверены, что хотите сбросить ВСЕ голоса?")) {
+      set(votesRef, { v0: 0, v1: 0, v2: 0 });
+    }
+  };
+
+  function updateUI() {
+    for (let i = 0; i < 3; i++) {
+      document.getElementById('count' + i).textContent = VOTES[i];
+      lamps[i].setVotes(VOTES[i]);
+      const pct = Math.round(Math.min(100, (VOTES[i] / MAX_BUBBLES) * 100));
+      document.getElementById('fill' + i).textContent = `заполнено ${pct}%`;
+    }
+    updateLeader();
+  }
+
+  function updateLeader() {
+    const total = VOTES.reduce((a, b) => a + b, 0);
+    const leaderEl = document.getElementById('leader');
+    if (total === 0) {
+      leaderEl.textContent = 'Пока никто не голосовал';
+      return;
+    }
+    const max = Math.max(...VOTES);
+    const winners = VOTES.map((v, i) => v === max ? i : -1).filter(i => i >= 0);
+    const names = ['Вау-эффект', 'Есть над чем подумать', 'Я это знаю'];
+    if (winners.length === 3) {
+      leaderEl.textContent = `Голосов: ${total}. Аудитория разделилась поровну!`;
+    } else if (winners.length > 1) {
+      leaderEl.textContent = `Голосов: ${total}. Лидируют: ${winners.map(i => names[i]).join(' и ')}`;
+    } else {
+      leaderEl.textContent = `Голосов: ${total}. Лидер: ${names[winners[0]]}`;
+    }
+  }
+
+  // --- Анимация ---
+  let last = performance.now();
+  function loop(now) {
+    const dt = Math.min(50, now - last);
+    last = now;
+    for (const lamp of lamps) {
+      lamp.update(dt);
+      lamp.draw();
+    }
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  // --- Fullscreen ---
+  window.toggleFullscreen = function() {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(err => console.warn(err));
+    } else {
+      document.exitFullscreen();
+    }
+  };
+  document.addEventListener('fullscreenchange', () => {
+    const btn = document.getElementById('fsBtn');
+    btn.textContent = document.fullscreenElement ? '⛶ Выйти' : '⛶ На весь экран';
+  });
 </script>
 </body>
 </html>
